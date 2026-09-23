@@ -1,0 +1,319 @@
+---
+import "../styles/global.css";
+import { journey } from "../data/memories";
+---
+
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="icon" href="/favicon.ico" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+		<meta name="theme-color" content="#4f6687" />
+		<meta name="generator" content={Astro.generator} />
+		<title>{journey.title}</title>
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Quicksand:wght@500;600;700&display=swap"
+			rel="stylesheet"
+		/>
+	</head>
+	<body>
+		<canvas id="scene-canvas"></canvas>
+
+		<div id="progress-pill"></div>
+
+		<div id="entry-overlay" class="overlay is-visible">
+			<p class="eyebrow">happy anniversary</p>
+			<h1 class="title">{journey.title}</h1>
+			<p class="subtitle">{journey.subtitle}</p>
+			<button id="entry-btn" class="btn-primary" type="button">Tap to begin our walk</button>
+		</div>
+
+		<div id="stop-overlay" class="overlay">
+			<div class="card">
+				<div id="stop-gallery" class="gallery"></div>
+				<p id="stop-chapter" class="eyebrow" style="margin: 0 0 6px;"></p>
+				<span id="stop-nickname" class="pill"></span>
+				<h2 id="stop-place" class="place"></h2>
+				<p id="stop-date" class="date"></p>
+				<p id="stop-caption" class="caption"></p>
+				<div id="stop-timer" class="card-timer"><span></span></div>
+				<div class="card-actions">
+					<button id="stop-close" class="btn-secondary" type="button">Close</button>
+				</div>
+			</div>
+		</div>
+
+		<div id="finale-overlay" class="overlay">
+			<p class="eyebrow">one year, and counting</p>
+			<h1 id="finale-title" class="title"></h1>
+			<p id="finale-message" class="subtitle" style="max-width: 380px;"></p>
+			<button id="finale-close" class="btn-primary" type="button">Back to our route</button>
+		</div>
+
+		<div id="hint-toast"></div>
+		<button id="audio-toggle" type="button" aria-label="Toggle music">🔈</button>
+		<audio id="theme-audio" src="/gururen_deer.mp3" preload="auto" loop></audio>
+
+		<script>
+			import { JourneyScene } from "../lib/scene";
+			import { journey } from "../data/memories";
+
+			const canvas = document.getElementById("scene-canvas") as HTMLCanvasElement;
+			const entryOverlay = document.getElementById("entry-overlay") as HTMLDivElement;
+			const entryBtn = document.getElementById("entry-btn") as HTMLButtonElement;
+			const progressPill = document.getElementById("progress-pill") as HTMLDivElement;
+
+			const stopOverlay = document.getElementById("stop-overlay") as HTMLDivElement;
+			const stopGallery = document.getElementById("stop-gallery") as HTMLDivElement;
+			const stopChapter = document.getElementById("stop-chapter") as HTMLParagraphElement;
+			const stopNickname = document.getElementById("stop-nickname") as HTMLSpanElement;
+			const stopPlace = document.getElementById("stop-place") as HTMLHeadingElement;
+			const stopDate = document.getElementById("stop-date") as HTMLParagraphElement;
+			const stopCaption = document.getElementById("stop-caption") as HTMLParagraphElement;
+			const stopClose = document.getElementById("stop-close") as HTMLButtonElement;
+
+			const finaleOverlay = document.getElementById("finale-overlay") as HTMLDivElement;
+			const finaleTitle = document.getElementById("finale-title") as HTMLHeadingElement;
+			const finaleMessage = document.getElementById("finale-message") as HTMLParagraphElement;
+			const finaleClose = document.getElementById("finale-close") as HTMLButtonElement;
+
+			const hintToast = document.getElementById("hint-toast") as HTMLDivElement;
+			const audioToggle = document.getElementById("audio-toggle") as HTMLButtonElement;
+			const themeAudio = document.getElementById("theme-audio") as HTMLAudioElement;
+
+			const stopTimer = document.getElementById("stop-timer") as HTMLDivElement;
+			const stopTimerBar = stopTimer.firstElementChild as HTMLSpanElement;
+
+			const photoLoaded = new Map<string, boolean>();
+			const visitedStops = new Set<number>();
+			// True while the guided walk is driving the camera and the cards.
+			let touring = false;
+
+			function preloadPhoto(url: string): void {
+				if (photoLoaded.has(url)) return;
+				const img = new Image();
+				img.onload = () => photoLoaded.set(url, true);
+				img.onerror = () => photoLoaded.set(url, false);
+				img.src = url;
+			}
+			journey.stops.forEach((stop) => {
+				stop.photos?.forEach((url) => preloadPhoto(url));
+			});
+
+			function formatDate(iso: string): string {
+				const date = new Date(iso);
+				if (Number.isNaN(date.getTime())) return iso;
+				return date.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+			}
+
+			function renderGallery(photos: string[]): void {
+				const loaded = photos.filter((url) => photoLoaded.get(url));
+				stopGallery.innerHTML = "";
+
+				if (loaded.length === 0) {
+					const empty = document.createElement("div");
+					empty.className = "card-photo";
+					empty.innerHTML = '<span class="placeholder-hint">🍂 add photos for this stop in /public/photos</span>';
+					stopGallery.appendChild(empty);
+					return;
+				}
+
+				const track = document.createElement("div");
+				track.className = "gallery-track";
+				loaded.forEach((url) => {
+					const slide = document.createElement("div");
+					slide.className = "gallery-slide";
+					slide.style.backgroundImage = `url('${url}')`;
+					track.appendChild(slide);
+				});
+				stopGallery.appendChild(track);
+
+				if (loaded.length > 1) {
+					const dots = document.createElement("div");
+					dots.className = "gallery-dots";
+					loaded.forEach((_, i) => {
+						const dot = document.createElement("span");
+						dot.className = i === 0 ? "dot active" : "dot";
+						dots.appendChild(dot);
+					});
+					stopGallery.appendChild(dots);
+
+					track.addEventListener("scroll", () => {
+						const index = Math.round(track.scrollLeft / Math.max(track.clientWidth, 1));
+						Array.from(dots.children).forEach((dot, i) => dot.classList.toggle("active", i === index));
+					});
+				}
+			}
+
+			let toastTimer: number | null = null;
+			function showToast(message: string) {
+				hintToast.textContent = message;
+				hintToast.classList.add("visible");
+				if (toastTimer !== null) window.clearTimeout(toastTimer);
+				toastTimer = window.setTimeout(() => hintToast.classList.remove("visible"), 3200);
+			}
+
+			function updateProgressPill() {
+				progressPill.textContent = `${visitedStops.size} / ${journey.stops.length} memories found`;
+				progressPill.classList.add("visible");
+			}
+
+			function openStop(index: number) {
+				const stop = journey.stops[index];
+				if (!stop) return;
+
+				stopChapter.textContent = `Chapter ${index + 1} of ${journey.stops.length}`;
+				stopNickname.textContent = stop.nickname ?? "";
+				stopNickname.style.display = stop.nickname ? "inline-block" : "none";
+				stopPlace.textContent = stop.place;
+				stopDate.textContent = formatDate(stop.date);
+				stopCaption.textContent = stop.caption;
+				renderGallery(stop.photos ?? []);
+
+				stopOverlay.classList.add("is-visible");
+				scene.markVisited(index);
+				visitedStops.add(index);
+				updateProgressPill();
+			}
+
+			function openFinale() {
+				finaleTitle.textContent = journey.finaleTitle;
+				finaleMessage.textContent = journey.finaleMessage;
+				finaleOverlay.classList.add("is-visible");
+			}
+
+			const scene = new JourneyScene(canvas, journey.stops, journey.finaleTitle, {
+				onSelectStop(index) {
+					if (touring) return;
+					openStop(index);
+				},
+				onFinaleReady() {
+					if (!touring) showToast("The last light is glowing — tap it ✨");
+				},
+				onFinaleSelect() {
+					if (!touring) openFinale();
+				},
+				onFinaleLocked(visited, total) {
+					const remaining = total - visited;
+					showToast(`Visit ${remaining} more ${remaining === 1 ? "memory" : "memories"} first`);
+				},
+			});
+
+			let skipWait: (() => void) | null = null;
+
+			// Resolves after `ms`, or straight away if the viewer taps Close.
+			// Drives the countdown bar and flips through the stop's photos.
+			function waitForClose(ms: number): Promise<void> {
+				stopTimer.style.display = "";
+				stopTimerBar.style.transition = "none";
+				stopTimerBar.style.width = "100%";
+				void stopTimerBar.offsetWidth;
+				stopTimerBar.style.transition = `width ${ms}ms linear`;
+				stopTimerBar.style.width = "0%";
+
+				const track = stopGallery.querySelector<HTMLDivElement>(".gallery-track");
+				const slides = track?.children.length ?? 0;
+				let slide = 0;
+				const slideTimer =
+					track && slides > 1
+						? window.setInterval(() => {
+								slide = (slide + 1) % slides;
+								track.scrollTo({ left: slide * track.clientWidth, behavior: "smooth" });
+							}, ms / slides)
+						: null;
+
+				return new Promise((resolve) => {
+					const done = () => {
+						window.clearTimeout(timeout);
+						if (slideTimer !== null) window.clearInterval(slideTimer);
+						skipWait = null;
+						resolve();
+					};
+					const timeout = window.setTimeout(done, ms);
+					skipWait = done;
+				});
+			}
+
+			function dwellTime(index: number): number {
+				const photos = (journey.stops[index]?.photos ?? []).filter((url) => photoLoaded.get(url)).length;
+				return Math.min(4500 + photos * 2600, 24000);
+			}
+
+			// The guided walk: glide to each lamp, open its memory, let it sit,
+			// close it, move on — then finish at the last light.
+			async function runTour() {
+				touring = true;
+				for (let i = 0; i < journey.stops.length; i++) {
+					await scene.flyToStop(i);
+					openStop(i);
+					await waitForClose(dwellTime(i));
+					stopOverlay.classList.remove("is-visible");
+					await new Promise((r) => window.setTimeout(r, 450));
+				}
+				await scene.flyToFinale();
+				openFinale();
+				touring = false;
+				stopTimer.style.display = "none";
+				scene.enableFreeLook();
+			}
+
+			entryBtn.addEventListener("click", () => {
+				entryOverlay.classList.remove("is-visible");
+				playMusic();
+				void runTour();
+			});
+
+			stopClose.addEventListener("click", () => {
+				if (skipWait) {
+					skipWait();
+					return;
+				}
+				stopOverlay.classList.remove("is-visible");
+			});
+
+			finaleClose.addEventListener("click", () => {
+				finaleOverlay.classList.remove("is-visible");
+				showToast("Drag to look around ✦ tap the lights to revisit");
+			});
+
+			const MUSIC_VOLUME = 0.4;
+			let fadeTimer: number | null = null;
+
+			// Starts playback from silence and ramps up over ~2s. Must run inside a
+			// user gesture (tap) or the browser blocks it.
+			function playMusic() {
+				if (fadeTimer !== null) window.clearInterval(fadeTimer);
+				themeAudio.volume = 0;
+				themeAudio
+					.play()
+					.then(() => {
+						fadeTimer = window.setInterval(() => {
+							themeAudio.volume = Math.min(MUSIC_VOLUME, themeAudio.volume + MUSIC_VOLUME / 40);
+							if (themeAudio.volume >= MUSIC_VOLUME && fadeTimer !== null) {
+								window.clearInterval(fadeTimer);
+								fadeTimer = null;
+							}
+						}, 50);
+					})
+					.catch(() => {});
+			}
+
+			themeAudio.addEventListener("play", () => (audioToggle.textContent = "🔊"));
+			themeAudio.addEventListener("pause", () => (audioToggle.textContent = "🔈"));
+
+			audioToggle.addEventListener("click", () => {
+				if (themeAudio.paused) {
+					playMusic();
+				} else {
+					themeAudio.pause();
+				}
+			});
+			themeAudio.addEventListener("error", () => {
+				audioToggle.style.display = "none";
+			});
+		</script>
+	</body>
+</html>
