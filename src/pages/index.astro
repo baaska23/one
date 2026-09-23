@@ -239,7 +239,7 @@ import { journey } from "../data/memories";
 
 			function dwellTime(index: number): number {
 				const photos = (journey.stops[index]?.photos ?? []).filter((url) => photoLoaded.get(url)).length;
-				return Math.min(4500 + photos * 2600, 24000);
+				return Math.min(4000 + photos * 2200, 22000);
 			}
 
 			// The guided walk: glide to each lamp, open its memory, let it sit,
